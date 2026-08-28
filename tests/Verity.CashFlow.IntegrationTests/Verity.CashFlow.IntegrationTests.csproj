@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Dapper" Version="2.1.79" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
@@ -21,12 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Using Include="Xunit" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\Verity.CashFlow.Entries.Api\Verity.CashFlow.Entries.Api.csproj" />
     <ProjectReference Include="..\..\src\Verity.CashFlow.Consolidation.Api\Verity.CashFlow.Consolidation.Api.csproj" />
+    <ProjectReference Include="..\..\src\Verity.CashFlow.Entries.Api\Verity.CashFlow.Entries.Api.csproj" />
   </ItemGroup>
 
 </Project>

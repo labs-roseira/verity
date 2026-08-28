@@ -8,15 +8,14 @@ namespace Verity.CashFlow.Infrastructure.Messaging;
 public sealed class RabbitMqEventPublisher(
     IOptions<RabbitMqOptions> options) : IEventPublisher, IAsyncDisposable
 {
-    private readonly RabbitMqOptions _options = options.Value;
-    private readonly SemaphoreSlim _connectionLock = new(1, 1);
+    private readonly RabbitMqOptions _opts = options.Value;
+    private readonly SemaphoreSlim _lock = new(1, 1);
     private IConnection? _connection;
     private IChannel? _channel;
 
-    public async Task PublishAsync(string type, string payload,
-        CancellationToken cancellationToken)
+    public async Task PublishAsync(string type, string payload, CancellationToken ct)
     {
-        var channel = await GetChannelAsync(cancellationToken).ConfigureAwait(false);
+        var channel = await GetChannelAsync(ct);
 
         var properties = new BasicProperties
         {
@@ -26,72 +25,62 @@ public sealed class RabbitMqEventPublisher(
         };
 
         await channel.BasicPublishAsync(
-            exchange: _options.EntriesExchange,
-            routingKey: _options.EntryCreatedRoutingKey,
+            _opts.EntriesExchange,
+            _opts.EntryCreatedRoutingKey,
             mandatory: true,
-            basicProperties: properties,
-            body: Encoding.UTF8.GetBytes(payload),
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            properties,
+            Encoding.UTF8.GetBytes(payload),
+            ct);
     }
 
-    private async Task<IChannel> GetChannelAsync(CancellationToken cancellationToken)
+    private async Task<IChannel> GetChannelAsync(CancellationToken ct)
     {
         if (_channel?.IsOpen is true)
             return _channel;
 
-        await _connectionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _lock.WaitAsync(ct);
         try
         {
             if (_channel?.IsOpen is true)
                 return _channel;
 
-            _connection ??= await CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
+            _connection ??= await new ConnectionFactory
+            {
+                HostName = _opts.HostName,
+                Port = _opts.Port,
+                UserName = _opts.UserName,
+                Password = _opts.Password,
+                AutomaticRecoveryEnabled = true,
+                RequestedConnectionTimeout = TimeSpan.FromSeconds(2)
+            }.CreateConnectionAsync(ct);
 
-            var channelOptions = new CreateChannelOptions(
-                publisherConfirmationsEnabled: true,
-                publisherConfirmationTrackingEnabled: true);
-
-            _channel = await _connection.CreateChannelAsync(channelOptions, cancellationToken)
-                .ConfigureAwait(false);
+            _channel = await _connection.CreateChannelAsync(
+                new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true),
+                ct);
 
             await _channel.ExchangeDeclareAsync(
-                exchange: _options.EntriesExchange,
-                type: ExchangeType.Direct,
+                _opts.EntriesExchange,
+                ExchangeType.Direct,
                 durable: true,
                 autoDelete: false,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                cancellationToken: ct);
 
             return _channel;
         }
         finally
         {
-            _connectionLock.Release();
+            _lock.Release();
         }
-    }
-
-    private async Task<IConnection> CreateConnectionAsync(CancellationToken cancellationToken)
-    {
-        var factory = new ConnectionFactory
-        {
-            HostName = _options.HostName,
-            Port = _options.Port,
-            UserName = _options.UserName,
-            Password = _options.Password,
-            AutomaticRecoveryEnabled = true,
-            RequestedConnectionTimeout = TimeSpan.FromSeconds(2)
-        };
-
-        return await factory.CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
     {
         if (_channel is not null)
-            await _channel.DisposeAsync().ConfigureAwait(false);
+            await _channel.DisposeAsync();
 
         if (_connection is not null)
-            await _connection.DisposeAsync().ConfigureAwait(false);
+            await _connection.DisposeAsync();
 
-        _connectionLock.Dispose();
+        _lock.Dispose();
     }
 }

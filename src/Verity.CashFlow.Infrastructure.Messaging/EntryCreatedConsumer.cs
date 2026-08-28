@@ -11,80 +11,61 @@ public sealed class EntryCreatedConsumer(
     EntryCreatedProcessor processor,
     ILogger<EntryCreatedConsumer> logger) : BackgroundService
 {
-    private readonly RabbitMqOptions _options = options.Value;
+    private readonly RabbitMqOptions _opts = options.Value;
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        while (!ct.IsCancellationRequested)
         {
             try
             {
-                await ConsumeUntilFailedAsync(stoppingToken).ConfigureAwait(false);
+                await RunAsync(ct);
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 break;
             }
             catch (Exception ex)
             {
-                logger.LogError(ex,
-                    "RabbitMQ consumer failed; retrying connection in 5 seconds.");
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken)
-                    .ConfigureAwait(false);
+                logger.LogError(ex, "Consumer connection lost; retrying in 5s.");
+                await Task.Delay(TimeSpan.FromSeconds(5), ct);
             }
         }
     }
 
-    private async Task ConsumeUntilFailedAsync(CancellationToken cancellationToken)
+    private async Task RunAsync(CancellationToken ct)
     {
         var factory = new ConnectionFactory
         {
-            HostName = _options.HostName,
-            Port = _options.Port,
-            UserName = _options.UserName,
-            Password = _options.Password,
+            HostName = _opts.HostName,
+            Port = _opts.Port,
+            UserName = _opts.UserName,
+            Password = _opts.Password,
             AutomaticRecoveryEnabled = true,
             RequestedConnectionTimeout = TimeSpan.FromSeconds(2)
         };
 
-        await using var connection = await factory
-            .CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var channel = await connection
-            .CreateChannelAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        await using var connection = await factory.CreateConnectionAsync(ct);
+        await using var channel = await connection.CreateChannelAsync(cancellationToken: ct);
 
-        await RabbitMqTopology.DeclareAsync(channel, _options, cancellationToken)
-            .ConfigureAwait(false);
-
-        await channel.BasicQosAsync(
-            prefetchSize: 0,
-            prefetchCount: 10,
-            global: false,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        await RabbitMqTopology.DeclareAsync(channel, _opts, ct);
+        await channel.BasicQosAsync(0, 10, false, ct);
 
         var consumer = new AsyncEventingBasicConsumer(channel);
-        consumer.ReceivedAsync += async (_, eventArgs) =>
-        {
-            var decision = await processor
-                .ProcessAsync(eventArgs.Body, cancellationToken).ConfigureAwait(false);
+        consumer.ReceivedAsync += (_, ea) => HandleAsync(channel, ea, ct);
 
-            if (decision == ProcessingDecision.Acknowledge)
-            {
-                await channel.BasicAckAsync(eventArgs.DeliveryTag, multiple: false)
-                    .ConfigureAwait(false);
-            }
-            else
-            {
-                await channel.BasicRejectAsync(eventArgs.DeliveryTag, requeue: false)
-                    .ConfigureAwait(false);
-            }
-        };
+        await channel.BasicConsumeAsync(_opts.EntryCreatedQueue, autoAck: false, consumer, ct);
 
-        await channel.BasicConsumeAsync(
-            queue: _options.EntryCreatedQueue,
-            autoAck: false,
-            consumer: consumer,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        await Task.Delay(Timeout.Infinite, ct);
+    }
 
-        await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+    private async Task HandleAsync(IChannel channel, BasicDeliverEventArgs ea, CancellationToken ct)
+    {
+        var decision = await processor.ProcessAsync(ea.Body, ct);
+
+        if (decision == ProcessingDecision.Acknowledge)
+            await channel.BasicAckAsync(ea.DeliveryTag, false);
+        else
+            await channel.BasicRejectAsync(ea.DeliveryTag, false);
     }
 }

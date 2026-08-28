@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="NSubstitute" Version="6.2.0" />
@@ -17,12 +21,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Using Include="Xunit" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\Verity.CashFlow.Domain\Verity.CashFlow.Domain.csproj" />
     <ProjectReference Include="..\..\src\Verity.CashFlow.Application\Verity.CashFlow.Application.csproj" />
+    <ProjectReference Include="..\..\src\Verity.CashFlow.Domain\Verity.CashFlow.Domain.csproj" />
     <ProjectReference Include="..\..\src\Verity.CashFlow.Infrastructure.Messaging\Verity.CashFlow.Infrastructure.Messaging.csproj" />
   </ItemGroup>
 

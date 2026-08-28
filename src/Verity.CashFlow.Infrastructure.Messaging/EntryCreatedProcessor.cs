@@ -15,7 +15,7 @@ public sealed class EntryCreatedProcessor(
     private static readonly TimeSpan DefaultRetryDelay = TimeSpan.FromMilliseconds(500);
 
     public async Task<ProcessingDecision> ProcessAsync(ReadOnlyMemory<byte> body,
-        CancellationToken cancellationToken)
+        CancellationToken ct)
     {
         EntryCreated @event;
         try
@@ -28,45 +28,38 @@ public sealed class EntryCreatedProcessor(
         }
         catch (JsonException ex)
         {
-            logger.LogWarning(ex,
-                "Poison message received; sending to dead letter queue.");
+            logger.LogWarning(ex, "Poison message; dead lettering.");
             return ProcessingDecision.DeadLetter;
         }
 
-        for (var attempt = 1; ; attempt++)
+        var delay = retryDelay ?? DefaultRetryDelay;
+
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             try
             {
-                var applied = await entryProjection.ApplyAsync(@event, cancellationToken)
-                    .ConfigureAwait(false);
+                if (await entryProjection.ApplyAsync(@event, ct).ConfigureAwait(false))
+                    return ProcessingDecision.Acknowledge;
 
-                if (!applied)
-                    logger.LogInformation("Duplicate entry {EntryId} ignored (idempotency key: {IdempotencyKey}).",
-                        @event.EntryId, @event.IdempotencyKey ?? "(none)");
-
+                logger.LogInformation("Duplicate entry {EntryId} ignored.", @event.EntryId);
                 return ProcessingDecision.Acknowledge;
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }
+            catch (Exception ex) when (attempt < MaxAttempts)
+            {
+                logger.LogWarning(ex, "Projection failed (attempt {Attempt}).", attempt);
+                await Task.Delay(delay * attempt, ct).ConfigureAwait(false);
+            }
             catch (Exception ex)
             {
-                if (attempt >= MaxAttempts)
-                {
-                    logger.LogError(ex,
-                        "Failed to project entry {EntryId} after {Attempts} attempts; dead lettering.",
-                        @event.EntryId, attempt);
-                    return ProcessingDecision.DeadLetter;
-                }
-
-                logger.LogWarning(ex,
-                    "Failed to project entry {EntryId} (attempt {Attempt} of {MaxAttempts}).",
-                    @event.EntryId, attempt, MaxAttempts);
-
-                var delay = retryDelay ?? DefaultRetryDelay;
-                await Task.Delay(delay * attempt, cancellationToken).ConfigureAwait(false);
+                logger.LogError(ex, "Failed to project entry {EntryId}; dead lettering.", @event.EntryId);
+                return ProcessingDecision.DeadLetter;
             }
         }
+
+        return ProcessingDecision.DeadLetter;
     }
 }
