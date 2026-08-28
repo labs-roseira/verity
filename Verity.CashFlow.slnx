@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Verity.CashFlow.Application/Verity.CashFlow.Application.csproj" />
+    <Project Path="src/Verity.CashFlow.Consolidation.Api/Verity.CashFlow.Consolidation.Api.csproj" />
+    <Project Path="src/Verity.CashFlow.Domain/Verity.CashFlow.Domain.csproj" />
+    <Project Path="src/Verity.CashFlow.Entries.Api/Verity.CashFlow.Entries.Api.csproj" />
+    <Project Path="src/Verity.CashFlow.Infrastructure.Messaging/Verity.CashFlow.Infrastructure.Messaging.csproj" />
+    <Project Path="src/Verity.CashFlow.Infrastructure.Persistence/Verity.CashFlow.Infrastructure.Persistence.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Verity.CashFlow.IntegrationTests/Verity.CashFlow.IntegrationTests.csproj" />
+    <Project Path="tests/Verity.CashFlow.UnitTests/Verity.CashFlow.UnitTests.csproj" />
+  </Folder>
+</Solution>
