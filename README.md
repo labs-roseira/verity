@@ -1,4 +1,4 @@
-# Verity CashFlow — Sistema de Fluxo de Caixa
+pode col# Verity CashFlow — Sistema de Fluxo de Caixa
 
 Sistema de fluxo de caixa para lojistas: registro de créditos/débitos e saldo diário
 consolidado. Duas aplicações desacopladas por mensageria (RabbitMQ) com banco único
@@ -14,8 +14,30 @@ por mensageria, garantindo resiliência e desacoplamento:
 - **Consolidation API** (:8081) — consome eventos, projeta saldos diários e expõe o
   relatório consolidado.
 
-Diagrama completo e fluxos em [docs/arquitetura.md](docs/arquitetura.md). Decisões
-técnicas documentadas em [ADRs](docs/adr/).
+```
+src/
+├── Verity.CashFlow.Domain/                      # Entities, VOs, Results (zero dependências)
+├── Verity.CashFlow.Application/                 # Casos de uso, ports, IntegrationEvents
+├── Verity.CashFlow.Infrastructure.Persistence/  # Dapper, MSSQL (CashFlowDb)
+├── Verity.CashFlow.Infrastructure.Messaging/    # RabbitMQ: outbox dispatcher, publisher, consumer
+├── Verity.CashFlow.Entries.Api/                 # :8080 — lançamentos
+└── Verity.CashFlow.Consolidation.Api/           # :8081 — saldo consolidado
+```
+
+**Dependências:** `Api(s) → Persistence/Messaging → Application → Domain` (aciclo).
+
+```
+POST /api/entries (8080) ──▶ transação: entries + outbox ──▶ 201
+                                    │
+                     dispatcher (2s) ▼ publisher confirms
+                               RabbitMQ (entry.created)
+                                    │ consumer (prefetch 10, retry ×3)
+                                    ▼
+               projeção idempotente → daily_balances
+                                    │
+GET /api/consolidated/{data} (8081) ◀────────────┘
+               falhas ──▶ DLQ (entry.created.dead)
+```
 
 ## Stack
 
@@ -26,6 +48,7 @@ técnicas documentadas em [ADRs](docs/adr/).
 | Banco | Microsoft SQL Server 2022 |
 | Mensageria | RabbitMQ 3 (client v7 async) |
 | Containers | Docker, docker-compose |
+| Documentação | OpenAPI, Swagger UI, Scalar UI |
 | Testes | xUnit, NSubstitute, Shouldly, Testcontainers |
 
 ## Pré-requisitos
@@ -42,6 +65,9 @@ técnicas documentadas em [ADRs](docs/adr/).
 docker compose up -d --build
 ```
 
+Isso sobe 4 containers (MSSQL, RabbitMQ, Entries API, Consolidation API) com healthchecks
+e dependências ordenadas. Aguardar até todos ficarem saudáveis (~30s na primeira vez).
+
 Verificar saúde:
 
 ```powershell
@@ -52,14 +78,38 @@ Invoke-RestMethod http://localhost:8081/health
 RabbitMQ Management UI: `http://localhost:15672` (usuário: `verity`, senha:
 `VerityRabbitMq2026`).
 
-Exemplo de uso:
+Documentação interativa (apenas em ambiente de desenvolvimento):
 
-```powershell
-$body = '{"amount": 150.75, "type": "Credit", "description": "Cash sale"}'
-Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/entries `
-    -ContentType "application/json" -Body $body
+| UI | Entries API | Consolidation API |
+|---|---|---|
+| Swagger | `http://localhost:8080/swagger` | `http://localhost:8081/swagger` |
+| Scalar | `http://localhost:8080/scalar/v1` | `http://localhost:8081/scalar/v1` |
+| OpenAPI JSON | `http://localhost:8080/openapi/v1.json` | `http://localhost:8081/openapi/v1.json` |
 
-Invoke-RestMethod http://localhost:8081/api/consolidated/2026-08-26
+> Swagger/Scalar são mapeados em qualquer ambiente que **não seja Production**
+> (inclui `Development` e `Testing`).
+
+Exemplo de uso (curl):
+
+```bash
+# Registrar crédito
+curl -X POST http://localhost:8080/api/entries \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 150.75, "type": "Credit", "description": "Cash sale"}'
+
+# Registrar débito
+curl -X POST http://localhost:8080/api/entries \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 30.00, "type": "Debit", "description": "Pagamento fornecedor"}'
+
+# Buscar por ID
+curl http://localhost:8080/api/entries/{id}
+
+# Listar por data (paginado)
+curl "http://localhost:8080/api/entries?date=2026-08-28&page=1&pageSize=20"
+
+# Saldo consolidado (aguardar ~5s para a consolidação assíncrona)
+curl http://localhost:8081/api/consolidated/2026-08-28
 ```
 
 Parar:
@@ -123,7 +173,8 @@ dotnet run --project src/Verity.CashFlow.Consolidation.Api
 }
 ```
 
-`occurredAtUtc` é opcional (default: agora). `type`: `"Credit"` ou `"Debit"`.
+`occurredAtUtc` é opcional (default: data/hora local atual). `type`: `"Credit"` ou
+`"Debit"`.
 
 ### Resposta 201
 
@@ -156,8 +207,10 @@ dotnet test Verity.CashFlow.sln
 ```
 
 - **Unitários** (44 testes): rodam sem Docker — xUnit + NSubstitute + Shouldly.
-- **Integração** (11 testes): exigem Docker (Testcontainers sobe MSSQL + RabbitMQ reais);
+- **Integração** (17 testes): exigem Docker (Testcontainers sobe MSSQL + RabbitMQ reais);
   auto-skip sem Docker (`[DockerRequiredFact]`).
+
+Total: **61 testes**, todos verdes.
 
 Só unitários:
 
@@ -168,21 +221,20 @@ dotnet test tests/Verity.CashFlow.UnitTests
 | Projeto | Conteúdo |
 |---|---|
 | `tests/Verity.CashFlow.UnitTests` | Domain, Application, Messaging |
-| `tests/Verity.CashFlow.IntegrationTests` | Endpoints, E2E, Resiliência |
+| `tests/Verity.CashFlow.IntegrationTests` | Endpoints, E2E, Resiliência, Documentação (Swagger/Scalar/OpenAPI) |
 
 ## Decisões técnicas
 
-| ADR | Título |
+| Tema | Decisão |
 |---|---|
-| [ADR-0001](docs/adr/ADR-0001-duas-apis-camadas-compartilhadas.md) | Duas APIs com camadas compartilhadas |
-| [ADR-0002](docs/adr/ADR-0002-dapper-data-access.md) | Dapper como data access |
-| [ADR-0003](docs/adr/ADR-0003-banco-unico-por-modulo.md) | Banco único com tabelas por módulo |
-| [ADR-0004](docs/adr/ADR-0004-rabbitmq-mensageria.md) | RabbitMQ na integração |
-| [ADR-0005](docs/adr/ADR-0005-outbox-transacional.md) | Padrão Outbox transacional |
-| [ADR-0006](docs/adr/ADR-0006-resiliencia-retry-dlq-idempotencia.md) | Retry, DLQ e idempotência |
-| [ADR-0007](docs/adr/ADR-0007-estrategia-testes.md) | Estratégia de testes |
-| [ADR-0008](docs/adr/ADR-0008-solid-referencia-epires.md) | SOLID com referência EP.SOLID |
-| [ADR-0009](docs/adr/ADR-0009-padroes-de-resultado.md) | Padrão Result&lt;T&gt; caseiro |
+| Arquitetura | Clean Architecture: `Domain` + `Application` compartilhados; 2 APIs isoladas |
+| Data access | Dapper (SQL explícito, sem ORM) |
+| Banco | 1 MSSQL (CashFlowDb, 4 tabelas com isolamento lógico por módulo) |
+| Mensageria | RabbitMQ com Outbox transacional (zero perda), consumer retry ×3 + DLQ + idempotência |
+| Resultados | Padrão `Result<T>` caseiro no Domain — falhas esperadas não usam exceções |
+| Estilo | SOLID com referência [EduardoPires/SOLID](https://github.com/EduardoPires/SOLID) |
+| Testes | xUnit + NSubstitute + Shouldly; Testcontainers para integração; TDD |
+| Documentação | OpenAPI + Swagger UI + Scalar UI |
 
 ## Melhorias futuras
 
@@ -212,5 +264,6 @@ dotnet test tests/Verity.CashFlow.UnitTests
 
 - [x] Mensageria (RabbitMQ com DLX/DLQ, publisher confirms, prefetch)
 - [x] Containers (Docker + docker-compose)
+- [x] Documentação interativa (Swagger UI + Scalar UI + OpenAPI)
 - [x] Diagramas de arquitetura (mermaid)
 - [x] TDD (testes unitários + integração com Testcontainers)
