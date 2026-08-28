@@ -33,9 +33,11 @@ flowchart LR
     Client -->|POST /api/entries| Entries[Entries API :8080]
     Entries -->|transação única| DB[(MSSQL\nentries + outbox)]
     Entries -->|201 Created| Client
+    Entries -->|inline publish\nbest-effort| RabbitMQ{{RabbitMQ\nentry.created}}
+    Entries -->|marca outbox\nprocessado| DB
 
-    Dispatcher[Outbox Dispatcher\n2s polling] -->|lê pendentes| DB
-    Dispatcher -->|publisher confirms| RabbitMQ{{RabbitMQ\nentry.created}}
+    Dispatcher[Outbox Dispatcher\n30s polling] -->|lê pendentes| DB
+    Dispatcher -->|publisher confirms| RabbitMQ
 
     Consumer[EntryCreated Consumer\nprefetch 10] -->|consome| RabbitMQ
     Consumer -->|projeção idempotente\nMERGE| DB2[(MSSQL\nprocessed_entries\ndaily_balances)]
@@ -175,13 +177,17 @@ dotnet run --project src/Verity.CashFlow.Consolidation.Api
 ## Como funciona
 
 1. **POST /api/entries** — a Entries API valida o lançamento, persiste entrada + evento
-   outbox em uma única transação e retorna 201 (mesmo com broker fora).
-2. **Outbox Dispatcher** — BackgroundService que a cada 2s publica eventos pendentes no
-   RabbitMQ com publisher confirms e marca como processados.
+   outbox em uma única transação, e retorna 201 (mesmo com broker fora). Após o commit,
+   tenta publicar o evento inline (best-effort); se conseguir, marca o outbox como
+   processado (latência ~0). Se falhar, o dispatcher retoma.
+2. **Outbox Dispatcher** — BackgroundService que a cada 30s publica eventos pendentes no
+   RabbitMQ com publisher confirms e marca como processados (safety net para o inline
+   publish).
 3. **EntryCreated Consumer** — BackgroundService na Consolidation que consome eventos com
    prefetch 10, tenta até 3 vezes com backoff linear, e na falha envia para DLQ.
-4. **Projeção** — insere em `processed_entries` (idempotência por EntryId) e atualiza
-   `daily_balances` (MERGE) na mesma transação.
+4. **Projeção idempotente** — insere em `processed_entries` (idempotência por EntryId) e
+   atualiza `daily_balances` (MERGE) na mesma transação. O evento `EntryCreated` carrega
+   um campo `IdempotencyKey` para rastreabilidade.
 5. **GET /api/consolidated/{date}** — retorna totais de créditos/débitos, saldo do dia e
    saldo acumulado. Dia sem dados retorna zeros (200, não 404).
 
@@ -232,6 +238,28 @@ dotnet run --project src/Verity.CashFlow.Consolidation.Api
 }
 ```
 
+> Após retornar 201, o evento `EntryCreated` é publicado inline (best-effort). A
+> consolidação aparece em ~0-30s dependendo se o inline publish ou o dispatcher completa
+> primeiro.
+
+### Evento de integração `EntryCreated`
+
+O evento serializado em JSON (publicado no RabbitMQ):
+
+```json
+{
+  "entryId": "guid",
+  "amount": 150.75,
+  "type": "Credit",
+  "description": "Cash sale",
+  "occurredAtUtc": "2026-08-26T10:00:00Z",
+  "idempotencyKey": null
+}
+```
+
+O campo `idempotencyKey` é opcional (default `null`) e serve para rastreabilidade no
+pipeline de mensageria.
+
 ### Erros de domínio (400/404)
 
 ```json
@@ -249,11 +277,11 @@ dotnet run --project src/Verity.CashFlow.Consolidation.Api
 dotnet test Verity.CashFlow.sln
 ```
 
-- **Unitários** (44 testes): rodam sem Docker — xUnit + NSubstitute + Shouldly.
+- **Unitários** (46 testes): rodam sem Docker — xUnit + NSubstitute + Shouldly.
 - **Integração** (17 testes): exigem Docker (Testcontainers sobe MSSQL + RabbitMQ reais);
   auto-skip sem Docker (`[DockerRequiredFact]`).
 
-Total: **61 testes**, todos verdes.
+Total: **63 testes**, todos verdes.
 
 Só unitários:
 
@@ -273,7 +301,7 @@ dotnet test tests/Verity.CashFlow.UnitTests
 | Arquitetura | Clean Architecture: `Domain` + `Application` compartilhados; 2 APIs isoladas |
 | Data access | Dapper (SQL explícito, sem ORM) |
 | Banco | 1 MSSQL (CashFlowDb, 4 tabelas com isolamento lógico por módulo) |
-| Mensageria | RabbitMQ com Outbox transacional (zero perda), consumer retry ×3 + DLQ + idempotência |
+| Mensageria | RabbitMQ com Outbox transacional (zero perda), inline publish best-effort, consumer retry ×3 + DLQ + idempotência por EntryId |
 | Resultados | Padrão `Result<T>` caseiro no Domain — falhas esperadas não usam exceções |
 | Estilo | SOLID com referência [EduardoPires/SOLID](https://github.com/EduardoPires/SOLID) |
 | Testes | xUnit + NSubstitute + Shouldly; Testcontainers para integração; TDD |
@@ -287,7 +315,7 @@ dotnet test tests/Verity.CashFlow.UnitTests
 - Contagem de tentativas por mensagem no outbox
 - Shovel/reprocessamento automático da DLQ
 - Migração de schema (Flyway/DbUp)
-- Idempotência no POST (chave de cliente)
+- Idempotência no POST via header HTTP (chave de cliente)
 - Rate limiting
 - Split do banco único em 2 bancos por módulo
 
