@@ -5,7 +5,7 @@ namespace Verity.CashFlow.Application.Entries;
 
 public interface IEntryStore
 {
-    Task SaveWithOutboxAsync(Entry entry, EntryCreated @event, CancellationToken cancellationToken);
+    Task<Guid> SaveWithOutboxAsync(Entry entry, EntryCreated @event, CancellationToken cancellationToken);
 
     Task<Entry?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 

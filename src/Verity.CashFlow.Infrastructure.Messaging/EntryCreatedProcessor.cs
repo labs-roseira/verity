@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Verity.CashFlow.Application.Consolidation;
 using Verity.CashFlow.Application.IntegrationEvents;
@@ -15,18 +14,13 @@ public sealed class EntryCreatedProcessor(
 
     private static readonly TimeSpan DefaultRetryDelay = TimeSpan.FromMilliseconds(500);
 
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        Converters = { new JsonStringEnumConverter() }
-    };
-
     public async Task<ProcessingDecision> ProcessAsync(ReadOnlyMemory<byte> body,
         CancellationToken cancellationToken)
     {
         EntryCreated @event;
         try
         {
-            @event = JsonSerializer.Deserialize<EntryCreated>(body.Span, SerializerOptions)
+            @event = JsonSerializer.Deserialize<EntryCreated>(body.Span, IntegrationEventJsonOptions.Default)
                      ?? throw new JsonException("Event payload is null.");
 
             if (@event.EntryId == Guid.Empty)

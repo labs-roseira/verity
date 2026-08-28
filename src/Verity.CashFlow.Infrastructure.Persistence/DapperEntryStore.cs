@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Dapper;
 using Microsoft.Data.SqlClient;
 using Verity.CashFlow.Application.Entries;
@@ -10,11 +9,6 @@ namespace Verity.CashFlow.Infrastructure.Persistence;
 
 public sealed class DapperEntryStore(SqlConnectionFactory connectionFactory) : IEntryStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        Converters = { new JsonStringEnumConverter() }
-    };
-
     private const string InsertEntrySql = """
         INSERT INTO dbo.entries (id, amount, type, description, occurred_at_utc, created_at_utc)
         VALUES (@Id, @Amount, @Type, @Description, @OccurredAtUtc, @CreatedAtUtc);
@@ -41,7 +35,7 @@ public sealed class DapperEntryStore(SqlConnectionFactory connectionFactory) : I
         OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
         """;
 
-    public async Task SaveWithOutboxAsync(Entry entry, EntryCreated @event,
+    public async Task<Guid> SaveWithOutboxAsync(Entry entry, EntryCreated @event,
         CancellationToken cancellationToken)
     {
         await using SqlConnection connection = await connectionFactory
@@ -63,13 +57,14 @@ public sealed class DapperEntryStore(SqlConnectionFactory connectionFactory) : I
             transaction,
             cancellationToken: cancellationToken));
 
-        var payload = JsonSerializer.Serialize(@event, SerializerOptions);
+        var outboxId = Guid.NewGuid();
+        var payload = JsonSerializer.Serialize(@event, IntegrationEventJsonOptions.Default);
 
         await connection.ExecuteAsync(new CommandDefinition(
             InsertOutboxSql,
             new
             {
-                Id = Guid.NewGuid(),
+                Id = outboxId,
                 Type = EventTypes.EntryCreated,
                 Payload = payload,
                 OccurredAtUtc = entry.CreatedAtUtc
@@ -78,6 +73,8 @@ public sealed class DapperEntryStore(SqlConnectionFactory connectionFactory) : I
             cancellationToken: cancellationToken));
 
         await transaction.CommitAsync(cancellationToken);
+
+        return outboxId;
     }
 
     public async Task<Entry?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
