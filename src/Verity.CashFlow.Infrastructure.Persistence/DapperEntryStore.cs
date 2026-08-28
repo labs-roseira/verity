@@ -19,11 +19,6 @@ public sealed class DapperEntryStore(SqlConnectionFactory connectionFactory) : I
         VALUES (@Id, @Type, @Payload, @OccurredAtUtc);
         """;
 
-    private const string InsertIdempotencyKeySql = """
-        INSERT INTO dbo.idempotency_keys ([key], entry_id, created_at_utc)
-        VALUES (@Key, @EntryId, @CreatedAtUtc);
-        """;
-
     private const string SelectByIdSql = """
         SELECT id, amount, type, description,
                occurred_at_utc AS OccurredAtUtc, created_at_utc AS CreatedAtUtc
@@ -40,19 +35,8 @@ public sealed class DapperEntryStore(SqlConnectionFactory connectionFactory) : I
         OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
         """;
 
-    private const string SelectByEntryIdSql = """
-        SELECT id, amount, type, description,
-               occurred_at_utc AS OccurredAtUtc, created_at_utc AS CreatedAtUtc
-        FROM dbo.entries
-        WHERE id = @EntryId;
-        """;
-
-    private const string SelectEntryIdByKeySql = """
-        SELECT entry_id FROM dbo.idempotency_keys WHERE [key] = @Key;
-        """;
-
     public async Task<Guid> SaveWithOutboxAsync(Entry entry, EntryCreated @event,
-        string? idempotencyKey, CancellationToken cancellationToken)
+        CancellationToken cancellationToken)
     {
         await using SqlConnection connection = await connectionFactory
             .OpenAsync(cancellationToken);
@@ -88,43 +72,9 @@ public sealed class DapperEntryStore(SqlConnectionFactory connectionFactory) : I
             transaction,
             cancellationToken: cancellationToken));
 
-        if (idempotencyKey is not null)
-        {
-            await connection.ExecuteAsync(new CommandDefinition(
-                InsertIdempotencyKeySql,
-                new
-                {
-                    Key = idempotencyKey,
-                    EntryId = entry.Id,
-                    CreatedAtUtc = entry.CreatedAtUtc
-                },
-                transaction,
-                cancellationToken: cancellationToken));
-        }
-
         await transaction.CommitAsync(cancellationToken);
 
         return outboxId;
-    }
-
-    public async Task<Entry?> GetByIdempotencyKeyAsync(string idempotencyKey,
-        CancellationToken cancellationToken)
-    {
-        await using var connection = await connectionFactory
-            .OpenAsync(cancellationToken);
-
-        var entryId = await connection.QuerySingleOrDefaultAsync<Guid?>(
-            new CommandDefinition(SelectEntryIdByKeySql, new { Key = idempotencyKey },
-                cancellationToken: cancellationToken));
-
-        if (entryId is null)
-            return null;
-
-        var row = await connection.QuerySingleOrDefaultAsync<EntryRow>(
-            new CommandDefinition(SelectByEntryIdSql, new { EntryId = entryId },
-                cancellationToken: cancellationToken));
-
-        return row?.ToDomain();
     }
 
     public async Task<Entry?> GetByIdAsync(Guid id, CancellationToken cancellationToken)

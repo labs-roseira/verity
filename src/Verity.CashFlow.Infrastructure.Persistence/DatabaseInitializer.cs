@@ -56,16 +56,6 @@ public sealed class DatabaseInitializer(string connectionString, string database
                 updated_at_utc  DATETIME2      NOT NULL
             );
         END;
-
-        IF OBJECT_ID(N'dbo.idempotency_keys') IS NULL
-        BEGIN
-            CREATE TABLE dbo.idempotency_keys
-            (
-                [key]            NVARCHAR(100)    NOT NULL CONSTRAINT PK_idempotency_keys PRIMARY KEY,
-                entry_id         UNIQUEIDENTIFIER NOT NULL,
-                created_at_utc   DATETIME2        NOT NULL
-            );
-        END;
         """;
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
