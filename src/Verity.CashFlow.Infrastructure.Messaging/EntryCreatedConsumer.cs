@@ -43,7 +43,8 @@ public sealed class EntryCreatedConsumer(
             Port = _options.Port,
             UserName = _options.UserName,
             Password = _options.Password,
-            AutomaticRecoveryEnabled = true
+            AutomaticRecoveryEnabled = true,
+            RequestedConnectionTimeout = TimeSpan.FromSeconds(2)
         };
 
         await using var connection = await factory

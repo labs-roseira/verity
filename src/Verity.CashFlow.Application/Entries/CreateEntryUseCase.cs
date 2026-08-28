@@ -48,20 +48,27 @@ public sealed class CreateEntryUseCase(
     private async Task TryPublishInlineAsync(
         Guid outboxId, EntryCreated @event, CancellationToken cancellationToken)
     {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
+
         try
         {
             var payload = JsonSerializer.Serialize(@event, IntegrationEventJsonOptions.Default);
 
-            await eventPublisher.PublishAsync(EventTypes.EntryCreated, payload, cancellationToken)
+            await eventPublisher.PublishAsync(EventTypes.EntryCreated, payload, timeoutCts.Token)
                 .ConfigureAwait(false);
 
-            await outboxStore.MarkProcessedAsync(outboxId, cancellationToken)
+            await outboxStore.MarkProcessedAsync(outboxId, timeoutCts.Token)
                 .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex,
-                "Inline publish for outbox message {OutboxId} failed; dispatcher will retry.",
+                "Inline publish for outbox message {OutboxId} failed or timed out; dispatcher will retry.",
                 outboxId);
         }
     }

@@ -65,24 +65,46 @@ public sealed class DatabaseInitializer(string connectionString, string database
             InitialCatalog = "master"
         };
 
-        await using (var master = new SqlConnection(masterBuilder.ConnectionString))
+        for (var attempt = 1; ; attempt++)
         {
-            await master.OpenAsync(cancellationToken);
-            await master.ExecuteAsync(new CommandDefinition(
-                $"IF DB_ID(N'{databaseName}') IS NULL CREATE DATABASE [{databaseName}]",
-                cancellationToken: cancellationToken));
+            try
+            {
+                await using (var master = new SqlConnection(masterBuilder.ConnectionString))
+                {
+                    await master.OpenAsync(cancellationToken);
+                    await master.ExecuteAsync(new CommandDefinition(
+                        $"IF DB_ID(N'{databaseName}') IS NULL CREATE DATABASE [{databaseName}]",
+                        cancellationToken: cancellationToken));
+                }
+                break;
+            }
+            catch (SqlException ex) when (attempt < 10)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+            }
         }
+
+        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
 
         var databaseBuilder = new SqlConnectionStringBuilder(connectionString)
         {
             InitialCatalog = databaseName
         };
 
-        await using (var database = new SqlConnection(databaseBuilder.ConnectionString))
+        for (var attempt = 1; ; attempt++)
         {
-            await database.OpenAsync(cancellationToken);
-            await database.ExecuteAsync(new CommandDefinition(
-                SchemaSql, cancellationToken: cancellationToken));
+            try
+            {
+                await using var database = new SqlConnection(databaseBuilder.ConnectionString);
+                await database.OpenAsync(cancellationToken);
+                await database.ExecuteAsync(new CommandDefinition(
+                    SchemaSql, cancellationToken: cancellationToken));
+                return;
+            }
+            catch (SqlException ex) when (ex.Number == 2714 && attempt < 5)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
         }
     }
 }

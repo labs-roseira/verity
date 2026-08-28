@@ -77,7 +77,8 @@ public sealed class RabbitMqEventPublisher(
             Port = _options.Port,
             UserName = _options.UserName,
             Password = _options.Password,
-            AutomaticRecoveryEnabled = true
+            AutomaticRecoveryEnabled = true,
+            RequestedConnectionTimeout = TimeSpan.FromSeconds(2)
         };
 
         return await factory.CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
