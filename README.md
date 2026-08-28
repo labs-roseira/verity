@@ -305,7 +305,7 @@ Load test com [k6](https://k6.io) validando throughput e latência da Entries AP
 docker compose up -d --build
 
 # Roda o load test via Docker (k6 acessa a API em host.docker.internal:8080)
-docker run --rm -i --network host grafana/k6 run - < load-test.js
+docker run --rm -v "${PWD}:/src" -w /src --network host grafana/k6 run load-test.js
 ```
 
 ### Cenário
@@ -318,19 +318,19 @@ docker run --rm -i --network host grafana/k6 run - < load-test.js
 
 | Métrica | Valor |
 |---|---|
-| Requisições totais | 10.816 |
-| Throughput | **216 req/s** |
+| Requisições totais | 10.515 |
+| Throughput | **210 req/s** |
 | Falhas | **0.00%** |
-| Latência média | 9.08ms |
-| Latência p95 | **16.53ms** |
-| Latência p99 | 24.52ms |
-| Latência máx | 95.25ms |
+| Latência média | 12.16ms |
+| Latência p95 | **18.88ms** |
+| Latência p99 | 27.05ms |
+| Latência máx | 353.63ms |
 | VUs concorrentes | 50 |
-| Checks | 21.632/21.632 (100%) |
+| Checks | 21.030/21.030 (100%) |
 
 ```
-✓ 'p(95)<500'  p(95)=16.53ms
-✓ 'p(99)<1000' p(99)=24.52ms
+✓ 'p(95)<500'  p(95)=18.88ms
+✓ 'p(99)<1000' p(99)=27.05ms
 ✓ 'rate<0.01'  rate=0.00%
 ```
 
