@@ -1,4 +1,4 @@
-pode col# Verity CashFlow — Sistema de Fluxo de Caixa
+# Verity CashFlow — Sistema de Fluxo de Caixa
 
 Sistema de fluxo de caixa para lojistas: registro de créditos/débitos e saldo diário
 consolidado. Duas aplicações desacopladas por mensageria (RabbitMQ) com banco único
@@ -26,17 +26,60 @@ src/
 
 **Dependências:** `Api(s) → Persistence/Messaging → Application → Domain` (aciclo).
 
+### Fluxo principal
+
+```mermaid
+flowchart LR
+    Client -->|POST /api/entries| Entries[Entries API :8080]
+    Entries -->|transação única| DB[(MSSQL\nentries + outbox)]
+    Entries -->|201 Created| Client
+
+    Dispatcher[Outbox Dispatcher\n2s polling] -->|lê pendentes| DB
+    Dispatcher -->|publisher confirms| RabbitMQ{{RabbitMQ\nentry.created}}
+
+    Consumer[EntryCreated Consumer\nprefetch 10] -->|consome| RabbitMQ
+    Consumer -->|projeção idempotente\nMERGE| DB2[(MSSQL\nprocessed_entries\ndaily_balances)]
+
+    Client2[Client] -->|GET /api/consolidated/{date}| Consolidation[Consolidation API :8081]
+    Consolidation -->|lê daily_balances| DB2
+    Consolidation -->|200 JSON| Client2
 ```
-POST /api/entries (8080) ──▶ transação: entries + outbox ──▶ 201
-                                    │
-                     dispatcher (2s) ▼ publisher confirms
-                               RabbitMQ (entry.created)
-                                    │ consumer (prefetch 10, retry ×3)
-                                    ▼
-               projeção idempotente → daily_balances
-                                    │
-GET /api/consolidated/{data} (8081) ◀────────────┘
-               falhas ──▶ DLQ (entry.created.dead)
+
+### Fluxo de resiliência (broker indisponível)
+
+```mermaid
+flowchart TD
+    Client -->|POST /api/entries| Entries[Entries API]
+    Entries -->|persiste entry + outbox| DB[(MSSQL)]
+    Entries -->|201 Created| Client
+    Entries -.->|broker fora ❌| RabbitMQ{{RabbitMQ\nindisponível}}
+
+    Dispatcher[Outbox Dispatcher] -->|tenta publicar| RabbitMQ
+    Dispatcher -->|falha → retém| DB
+
+    RabbitMQ -->|recupera ✅| Dispatcher
+    Dispatcher -->|publica pendentes| RabbitMQ
+    RabbitMQ -->|entrega| Consumer[Consumer]
+    Consumer -->|projeta| DB2[(daily_balances)]
+```
+
+### Fluxo de retry e DLQ
+
+```mermaid
+flowchart TD
+    RabbitMQ{{RabbitMQ\nentry.created}} -->|deliver| Consumer[EntryCreated Consumer]
+
+    Consumer -->|JSON inválido?| Poison{Poison?}
+    Poison -->|Sim| DLQ[DLQ\nentry.created.dead]
+    Poison -->|Não| Process[Processa projeção]
+
+    Process -->|sucesso ✅| Ack[ACK]
+    Process -->|falha ❌| Retry{Tentativa < 3?}
+    Retry -->|Sim| Backoff[Backoff linear\n500ms × attempt]
+    Backoff -->|requeue| RabbitMQ
+    Retry -->|Não| DLQ
+
+    DLQ -->|reprocessamento manual\nManagement UI / shovel| RabbitMQ
 ```
 
 ## Stack
