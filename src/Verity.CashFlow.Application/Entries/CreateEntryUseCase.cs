@@ -13,20 +13,31 @@ public sealed class CreateEntryUseCase(
     TimeProvider clock,
     ILogger<CreateEntryUseCase> logger)
 {
-    public async Task<Result<Entry>> ExecuteAsync(
+    public async Task<Result<CreateEntryResult>> ExecuteAsync(
         decimal amount,
         EntryType type,
         string description,
         DateTime? occurredAtUtc,
+        string? idempotencyKey,
         CancellationToken cancellationToken)
     {
+        if (idempotencyKey is not null)
+        {
+            var existing = await entryStore
+                .GetByIdempotencyKeyAsync(idempotencyKey, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (existing is not null)
+                return Result.Success(new CreateEntryResult(existing, WasCreated: false));
+        }
+
         var utcNow = clock.GetUtcNow().UtcDateTime;
 
         var entryResult = Entry.Create(amount, type, description,
             occurredAtUtc ?? utcNow.ToLocalTime(), utcNow);
 
         if (entryResult.IsFailure)
-            return Result.Failure<Entry>(entryResult.Error);
+            return Result.Failure<CreateEntryResult>(entryResult.Error);
 
         var entry = entryResult.Value;
 
@@ -35,13 +46,15 @@ public sealed class CreateEntryUseCase(
             entry.Amount,
             entry.Type,
             entry.Description,
-            entry.OccurredAtUtc);
+            entry.OccurredAtUtc,
+            IdempotencyKey: idempotencyKey);
 
-        var outboxId = await entryStore.SaveWithOutboxAsync(entry, @event, cancellationToken);
+        var outboxId = await entryStore.SaveWithOutboxAsync(
+            entry, @event, idempotencyKey, cancellationToken);
 
         await TryPublishInlineAsync(outboxId, @event, cancellationToken);
 
-        return Result.Success(entry);
+        return Result.Success(new CreateEntryResult(entry, WasCreated: true));
     }
 
     private async Task TryPublishInlineAsync(

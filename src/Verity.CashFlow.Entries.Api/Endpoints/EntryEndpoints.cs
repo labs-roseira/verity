@@ -15,8 +15,10 @@ public static class EntryEndpoints
             .WithSummary("Register a credit or debit cash flow entry.")
             .WithDescription(
                 "Persists the entry and stores an integration event for the consolidation "
-                + "service. Returns 201 even if the message broker is unavailable.")
+                + "service. Returns 201 even if the message broker is unavailable. "
+                + "Send 'Idempotency-Key' header to prevent duplicate entries on retries.")
             .Produces<EntryResponse>(StatusCodes.Status201Created)
+            .Produces<EntryResponse>(StatusCodes.Status200OK)
             .ProducesValidationProblem()
             .ProducesProblem(StatusCodes.Status400BadRequest);
 
@@ -37,20 +39,24 @@ public static class EntryEndpoints
 
     private static async Task<IResult> CreateEntry(
         CreateEntryRequest request,
+        HttpContext httpContext,
         CreateEntryUseCase createEntry,
         CancellationToken cancellationToken)
     {
+        var idempotencyKey = httpContext.Request.Headers.TryGetValue("Idempotency-Key", out var key)
+            ? key.ToString()
+            : null;
+
         var result = await createEntry.ExecuteAsync(
             request.Amount,
             request.Type,
             request.Description,
             request.OccurredAtUtc,
+            idempotencyKey,
             cancellationToken);
 
-        return result.IsSuccess
-            ? Results.Created($"/api/entries/{result.Value.Id}",
-                EntryResponse.From(result.Value))
-            : Results.Problem(
+        if (result.IsFailure)
+            return Results.Problem(
                 title: "Entry validation failed.",
                 detail: result.Error.Message,
                 statusCode: StatusCodes.Status400BadRequest,
@@ -58,6 +64,13 @@ public static class EntryEndpoints
                 {
                     ["errorCode"] = result.Error.Code
                 });
+
+        var created = result.Value;
+
+        return created.WasCreated
+            ? Results.Created($"/api/entries/{created.Entry.Id}",
+                EntryResponse.From(created.Entry))
+            : Results.Ok(EntryResponse.From(created.Entry));
     }
 
     private static async Task<IResult> GetEntryById(

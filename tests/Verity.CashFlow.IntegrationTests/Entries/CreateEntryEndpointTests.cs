@@ -72,6 +72,39 @@ public sealed class CreateEntryEndpointTests(CashFlowContainers containers) : ID
         response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
     }
 
+    [DockerRequiredFact]
+    public async Task Post_WithSameIdempotencyKey_Returns200WithOriginalEntry()
+    {
+        var key = Guid.NewGuid().ToString();
+        var request = new
+        {
+            amount = 75m,
+            type = "Credit",
+            description = "Idempotent entry"
+        };
+
+        var req1 = new HttpRequestMessage(HttpMethod.Post, "/api/entries")
+        {
+            Content = JsonContent.Create(request)
+        };
+        req1.Headers.Add("Idempotency-Key", key);
+        var resp1 = await _client.SendAsync(req1);
+        resp1.StatusCode.ShouldBe(HttpStatusCode.Created);
+        var body1 = await resp1.Content.ReadFromJsonAsync<EntryResponseTest>();
+        body1.ShouldNotBeNull();
+
+        var req2 = new HttpRequestMessage(HttpMethod.Post, "/api/entries")
+        {
+            Content = JsonContent.Create(request)
+        };
+        req2.Headers.Add("Idempotency-Key", key);
+        var resp2 = await _client.SendAsync(req2);
+        resp2.StatusCode.ShouldBe(HttpStatusCode.OK);
+        var body2 = await resp2.Content.ReadFromJsonAsync<EntryResponseTest>();
+        body2.ShouldNotBeNull();
+        body2.Id.ShouldBe(body1.Id);
+    }
+
     public void Dispose()
     {
         _client.Dispose();

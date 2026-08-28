@@ -41,8 +41,8 @@ public sealed class EntryCreatedProcessor(
                     .ConfigureAwait(false);
 
                 if (!applied)
-                    logger.LogInformation("Duplicate entry {EntryId} ignored.",
-                        @event.EntryId);
+                    logger.LogInformation("Duplicate entry {EntryId} ignored (idempotency key: {IdempotencyKey}).",
+                        @event.EntryId, @event.IdempotencyKey ?? "(none)");
 
                 return ProcessingDecision.Acknowledge;
             }

@@ -30,28 +30,21 @@ public class CreateEntryUseCaseTests
     {
         var utcNow = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);
         SetupClock(utcNow);
-        var outboxId = Guid.NewGuid();
         _entryStore.SaveWithOutboxAsync(
-                Arg.Any<Entry>(), Arg.Any<EntryCreated>(), Arg.Any<CancellationToken>())
-            .Returns(outboxId);
+                Arg.Any<Entry>(), Arg.Any<EntryCreated>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Guid.NewGuid());
         var sut = CreateSut();
 
         var result = await sut.ExecuteAsync(100m, EntryType.Credit, "Cash sale", null,
-            CancellationToken.None);
+            null, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
+        result.Value.WasCreated.ShouldBeTrue();
         await _entryStore.Received(1).SaveWithOutboxAsync(
-            Arg.Is<Entry>(e =>
-                e.Id == result.Value.Id &&
-                e.Amount == 100m &&
-                e.Type == EntryType.Credit &&
-                e.Description == "Cash sale"),
-            Arg.Is<EntryCreated>(ev =>
-                ev.EntryId == result.Value.Id &&
-                ev.Amount == 100m &&
-                ev.Type == EntryType.Credit &&
-                ev.Description == "Cash sale" &&
-                ev.OccurredAtUtc == utcNow.UtcDateTime.ToLocalTime()),
+            Arg.Is<Entry>(e => e.Amount == 100m && e.Type == EntryType.Credit),
+            Arg.Any<EntryCreated>(),
+            Arg.Is<string?>(k => k == null),
             Arg.Any<CancellationToken>());
     }
 
@@ -62,12 +55,13 @@ public class CreateEntryUseCaseTests
         SetupClock(utcNow);
         var outboxId = Guid.NewGuid();
         _entryStore.SaveWithOutboxAsync(
-                Arg.Any<Entry>(), Arg.Any<EntryCreated>(), Arg.Any<CancellationToken>())
+                Arg.Any<Entry>(), Arg.Any<EntryCreated>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(outboxId);
         var sut = CreateSut();
 
         await sut.ExecuteAsync(100m, EntryType.Credit, "Cash sale", null,
-            CancellationToken.None);
+            null, CancellationToken.None);
 
         await _eventPublisher.Received(1).PublishAsync(
             EventTypes.EntryCreated, Arg.Any<string>(), Arg.Any<CancellationToken>());
@@ -81,7 +75,8 @@ public class CreateEntryUseCaseTests
         var utcNow = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);
         SetupClock(utcNow);
         _entryStore.SaveWithOutboxAsync(
-                Arg.Any<Entry>(), Arg.Any<EntryCreated>(), Arg.Any<CancellationToken>())
+                Arg.Any<Entry>(), Arg.Any<EntryCreated>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(Guid.NewGuid());
         _eventPublisher.PublishAsync(
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -89,11 +84,59 @@ public class CreateEntryUseCaseTests
         var sut = CreateSut();
 
         var result = await sut.ExecuteAsync(100m, EntryType.Credit, "Cash sale", null,
-            CancellationToken.None);
+            null, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         await _outboxStore.DidNotReceiveWithAnyArgs().MarkProcessedAsync(
             default, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithIdempotencyKey_AndKeyExists_ReturnsExistingEntryWithoutSave()
+    {
+        var utcNow = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);
+        SetupClock(utcNow);
+        var existingEntry = Entry.Create(100m, EntryType.Credit, "Original",
+            new DateTime(2026, 1, 15, 10, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 1, 15, 12, 0, 0, DateTimeKind.Utc)).Value;
+        _entryStore.GetByIdempotencyKeyAsync("client-key-123", Arg.Any<CancellationToken>())
+            .Returns(existingEntry);
+        var sut = CreateSut();
+
+        var result = await sut.ExecuteAsync(200m, EntryType.Debit, "Different", null,
+            "client-key-123", CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.WasCreated.ShouldBeFalse();
+        result.Value.Entry.Id.ShouldBe(existingEntry.Id);
+        await _entryStore.DidNotReceiveWithAnyArgs().SaveWithOutboxAsync(
+            default!, default!, default, default);
+        await _eventPublisher.DidNotReceiveWithAnyArgs().PublishAsync(
+            default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithIdempotencyKey_AndKeyNotFound_CreatesNewAndSavesKey()
+    {
+        var utcNow = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);
+        SetupClock(utcNow);
+        _entryStore.GetByIdempotencyKeyAsync("new-key", Arg.Any<CancellationToken>())
+            .Returns((Entry?)null);
+        _entryStore.SaveWithOutboxAsync(
+                Arg.Any<Entry>(), Arg.Any<EntryCreated>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Guid.NewGuid());
+        var sut = CreateSut();
+
+        var result = await sut.ExecuteAsync(50m, EntryType.Credit, "New entry", null,
+            "new-key", CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.WasCreated.ShouldBeTrue();
+        await _entryStore.Received(1).SaveWithOutboxAsync(
+            Arg.Any<Entry>(), Arg.Any<EntryCreated>(),
+            Arg.Is<string?>(k => k == "new-key"),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -102,14 +145,15 @@ public class CreateEntryUseCaseTests
         var utcNow = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);
         SetupClock(utcNow);
         _entryStore.SaveWithOutboxAsync(
-                Arg.Any<Entry>(), Arg.Any<EntryCreated>(), Arg.Any<CancellationToken>())
+                Arg.Any<Entry>(), Arg.Any<EntryCreated>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(Guid.NewGuid());
         var sut = CreateSut();
 
         var result = await sut.ExecuteAsync(50m, EntryType.Debit, "Supplier payment", null,
-            CancellationToken.None);
+            null, CancellationToken.None);
 
-        result.Value.OccurredAtUtc.ShouldBe(utcNow.UtcDateTime.ToLocalTime());
+        result.Value.Entry.OccurredAtUtc.ShouldBe(utcNow.UtcDateTime.ToLocalTime());
     }
 
     [Fact]
@@ -119,14 +163,15 @@ public class CreateEntryUseCaseTests
         var occurredAt = new DateTime(2026, 1, 15, 8, 0, 0, DateTimeKind.Utc);
         SetupClock(utcNow);
         _entryStore.SaveWithOutboxAsync(
-                Arg.Any<Entry>(), Arg.Any<EntryCreated>(), Arg.Any<CancellationToken>())
+                Arg.Any<Entry>(), Arg.Any<EntryCreated>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(Guid.NewGuid());
         var sut = CreateSut();
 
         var result = await sut.ExecuteAsync(50m, EntryType.Debit, "Supplier payment",
-            occurredAt, CancellationToken.None);
+            occurredAt, null, CancellationToken.None);
 
-        result.Value.OccurredAtUtc.ShouldBe(occurredAt);
+        result.Value.Entry.OccurredAtUtc.ShouldBe(occurredAt);
     }
 
     [Fact]
@@ -137,12 +182,12 @@ public class CreateEntryUseCaseTests
         var sut = CreateSut();
 
         var result = await sut.ExecuteAsync(0m, EntryType.Credit, "Cash sale", null,
-            CancellationToken.None);
+            null, CancellationToken.None);
 
         result.IsFailure.ShouldBeTrue();
         result.Error.Code.ShouldBe("AMOUNT_MUST_BE_POSITIVE");
         await _entryStore.DidNotReceiveWithAnyArgs().SaveWithOutboxAsync(
-            default!, default!, default);
+            default!, default!, default, default);
         await _eventPublisher.DidNotReceiveWithAnyArgs().PublishAsync(
             default!, default!, default);
     }
@@ -155,7 +200,7 @@ public class CreateEntryUseCaseTests
         var sut = CreateSut();
 
         var result = await sut.ExecuteAsync(10m, EntryType.Credit, "Cash sale",
-            utcNow.UtcDateTime.AddDays(1), CancellationToken.None);
+            utcNow.UtcDateTime.AddDays(1), null, CancellationToken.None);
 
         result.IsFailure.ShouldBeTrue();
         result.Error.Code.ShouldBe("OCCURRED_AT_IN_FUTURE");

@@ -7,4 +7,5 @@ public sealed record EntryCreated(
     decimal Amount,
     EntryType Type,
     string Description,
-    DateTime OccurredAtUtc);
+    DateTime OccurredAtUtc,
+    string? IdempotencyKey = null);
