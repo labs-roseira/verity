@@ -10,7 +10,7 @@ public sealed class OutboxDispatcher(
     ILogger<OutboxDispatcher> logger) : BackgroundService
 {
     public const int BatchSize = 50;
-    public static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(30);
 
     public async Task DispatchPendingAsync(CancellationToken cancellationToken)
     {
