@@ -427,3 +427,10 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Local additions
+.idea/
+.vs/
+TestResults/
+*.DotSettings.user
+appsettings.*.local.json
