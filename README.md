@@ -294,6 +294,46 @@ dotnet test tests/Verity.CashFlow.UnitTests
 | `tests/Verity.CashFlow.UnitTests` | Domain, Application, Messaging |
 | `tests/Verity.CashFlow.IntegrationTests` | Endpoints, E2E, Resiliência, Documentação (Swagger/Scalar/OpenAPI) |
 
+## Testes de performance (k6)
+
+Load test com [k6](https://k6.io) validando throughput e latência da Entries API.
+
+### Como rodar
+
+```bash
+# Sobe o ambiente
+docker compose up -d --build
+
+# Roda o load test via Docker (k6 acessa a API em host.docker.internal:8080)
+docker run --rm -i --network host grafana/k6 run - < load-test.js
+```
+
+### Cenário
+
+- Ramp de 0 → 50 VUs em 10s, sustained 50 VUs por 30s, ramp down em 10s
+- Cada VU faz POST `/api/entries` com amount aleatório (Credit/Debit)
+- Thresholds: `http_req_failed < 1%`, `p(95) < 500ms`, `p(99) < 1000ms`
+
+### Resultado (28/08/2026 — Docker Desktop, Windows)
+
+| Métrica | Valor |
+|---|---|
+| Requisições totais | 10.816 |
+| Throughput | **216 req/s** |
+| Falhas | **0.00%** |
+| Latência média | 9.08ms |
+| Latência p95 | **16.53ms** |
+| Latência p99 | 24.52ms |
+| Latência máx | 95.25ms |
+| VUs concorrentes | 50 |
+| Checks | 21.632/21.632 (100%) |
+
+```
+✓ 'p(95)<500'  p(95)=16.53ms
+✓ 'p(99)<1000' p(99)=24.52ms
+✓ 'rate<0.01'  rate=0.00%
+```
+
 ## Decisões técnicas
 
 | Tema | Decisão |
@@ -338,3 +378,4 @@ dotnet test tests/Verity.CashFlow.UnitTests
 - [x] Documentação interativa (Swagger UI + Scalar UI + OpenAPI)
 - [x] Diagramas de arquitetura (mermaid)
 - [x] TDD (testes unitários + integração com Testcontainers)
+- [x] Teste de performance (k6 — 216 req/s, p95=16ms, 0% falhas)
