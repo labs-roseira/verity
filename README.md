@@ -40,7 +40,7 @@ flowchart LR
     Consumer[EntryCreated Consumer\nprefetch 10] -->|consome| RabbitMQ
     Consumer -->|projeção idempotente\nMERGE| DB2[(MSSQL\nprocessed_entries\ndaily_balances)]
 
-    Client2[Client] -->|GET /api/consolidated/{date}| Consolidation[Consolidation API :8081]
+    Client2[Client] -->|"GET /api/consolidated/{date}"| Consolidation[Consolidation API :8081]
     Consolidation -->|lê daily_balances| DB2
     Consolidation -->|200 JSON| Client2
 ```
